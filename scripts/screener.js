@@ -40,11 +40,14 @@ async function getYahooAuth() {
     : [cookieRes.headers.get("set-cookie")].filter(Boolean);
   const cookieHeader = cookies.map((c) => c.split(";")[0]).join("; ");
 
-  const crumbRes = await fetch("https://query2.finance.yahoo.com/v1/test/getcrumb", {
+  const crumbRes = await fetch("https://query1.finance.yahoo.com/v1/test/getcrumb", {
     headers: { ...HEADERS, Cookie: cookieHeader }
   });
   if (!crumbRes.ok) throw new Error(`Failed to get Yahoo crumb: HTTP ${crumbRes.status}`);
   const crumb = await crumbRes.text();
+  if (!crumb || crumb.includes("Invalid") || crumb.includes("<")) {
+    throw new Error(`Got a bad crumb value: "${crumb.slice(0, 80)}"`);
+  }
 
   return { cookieHeader, crumb };
 }
@@ -207,8 +210,8 @@ async function main() {
         `https://query1.finance.yahoo.com/v8/finance/chart/${symbol}?range=1y&interval=1d`
       );
       const fundUrl = auth
-        ? `https://query2.finance.yahoo.com/v10/finance/quoteSummary/${symbol}?modules=defaultKeyStatistics,financialData,summaryDetail,price&crumb=${encodeURIComponent(auth.crumb)}`
-        : `https://query2.finance.yahoo.com/v10/finance/quoteSummary/${symbol}?modules=defaultKeyStatistics,financialData,summaryDetail,price`;
+        ? `https://query1.finance.yahoo.com/v10/finance/quoteSummary/${symbol}?modules=defaultKeyStatistics,financialData,summaryDetail,price&crumb=${encodeURIComponent(auth.crumb)}`
+        : `https://query1.finance.yahoo.com/v10/finance/quoteSummary/${symbol}?modules=defaultKeyStatistics,financialData,summaryDetail,price`;
       const fundJson = await fetchJson(
         fundUrl,
         auth ? { Cookie: auth.cookieHeader } : {}
