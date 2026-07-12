@@ -21,10 +21,32 @@ const watchlist = [
 
 const HEADERS = { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" };
 
-async function fetchJson(url) {
-  const res = await fetch(url, { headers: HEADERS });
+async function fetchJson(url, extraHeaders = {}) {
+  const res = await fetch(url, { headers: { ...HEADERS, ...extraHeaders } });
   if (!res.ok) throw new Error(`HTTP ${res.status} for ${url}`);
   return res.json();
+}
+
+// Yahoo Finance's quoteSummary endpoint (used for fundamentals) now requires
+// a session cookie + auth "crumb". The chart endpoint (used for price/technical
+// data) does not. This fetches the cookie+crumb once and reuses it for every ticker.
+async function getYahooAuth() {
+  const cookieRes = await fetch("https://fc.yahoo.com", {
+    headers: HEADERS,
+    redirect: "manual"
+  });
+  const cookies = cookieRes.headers.getSetCookie
+    ? cookieRes.headers.getSetCookie()
+    : [cookieRes.headers.get("set-cookie")].filter(Boolean);
+  const cookieHeader = cookies.map((c) => c.split(";")[0]).join("; ");
+
+  const crumbRes = await fetch("https://query2.finance.yahoo.com/v1/test/getcrumb", {
+    headers: { ...HEADERS, Cookie: cookieHeader }
+  });
+  if (!crumbRes.ok) throw new Error(`Failed to get Yahoo crumb: HTTP ${crumbRes.status}`);
+  const crumb = await crumbRes.text();
+
+  return { cookieHeader, crumb };
 }
 
 function computeIndicatorsAndScore(symbol, priceJson, fundJson) {
@@ -171,13 +193,25 @@ async function writeToAirtable(records) {
 async function main() {
   const results = [];
 
+  let auth;
+  try {
+    auth = await getYahooAuth();
+  } catch (e) {
+    console.error(`Could not get Yahoo auth (fundamentals will fail): ${e.message}`);
+    auth = null;
+  }
+
   for (const symbol of watchlist) {
     try {
       const priceJson = await fetchJson(
         `https://query1.finance.yahoo.com/v8/finance/chart/${symbol}?range=1y&interval=1d`
       );
+      const fundUrl = auth
+        ? `https://query2.finance.yahoo.com/v10/finance/quoteSummary/${symbol}?modules=defaultKeyStatistics,financialData,summaryDetail,price&crumb=${encodeURIComponent(auth.crumb)}`
+        : `https://query2.finance.yahoo.com/v10/finance/quoteSummary/${symbol}?modules=defaultKeyStatistics,financialData,summaryDetail,price`;
       const fundJson = await fetchJson(
-        `https://query2.finance.yahoo.com/v10/finance/quoteSummary/${symbol}?modules=defaultKeyStatistics,financialData,summaryDetail,price`
+        fundUrl,
+        auth ? { Cookie: auth.cookieHeader } : {}
       );
       results.push(computeIndicatorsAndScore(symbol, priceJson, fundJson));
     } catch (e) {
