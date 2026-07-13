@@ -268,23 +268,70 @@ function computeIndicatorsAndScore(symbol, priceJson, fundJson) {
   };
 }
 
-async function writeToAirtable(records) {
+// Upserts on (Ticker, Date) so re-running the job for a day already written
+// updates those rows in place instead of creating duplicates.
+async function upsertToAirtable(records) {
   const url = `https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/${AIRTABLE_TABLE_ID}`;
   for (let i = 0; i < records.length; i += AIRTABLE_BATCH_SIZE) {
     const batch = records.slice(i, i + AIRTABLE_BATCH_SIZE);
     const res = await fetch(url, {
-      method: "POST",
+      method: "PATCH",
       headers: {
         Authorization: `Bearer ${AIRTABLE_TOKEN}`,
         "Content-Type": "application/json"
       },
-      body: JSON.stringify({ records: batch, typecast: true })
+      body: JSON.stringify({
+        records: batch,
+        typecast: true,
+        performUpsert: { fieldsToMergeOn: ["Ticker", "Date"] }
+      })
     });
     if (!res.ok) {
       const body = await res.text();
-      throw new Error(`Airtable write failed for batch starting at ${i}: ${res.status} ${body}`);
+      throw new Error(`Airtable upsert failed for batch starting at ${i}: ${res.status} ${body}`);
     }
     if (i + AIRTABLE_BATCH_SIZE < records.length) {
+      await sleep(250);
+    }
+  }
+}
+
+// Rows already in the table for `today` whose ticker isn't in this run's
+// results (e.g. the ranking shifted between two runs on the same day).
+async function getStaleRecordIds(today, keepTickers) {
+  const formula = encodeURIComponent(`IS_SAME({Date}, "${today}", "day")`);
+  const headers = { Authorization: `Bearer ${AIRTABLE_TOKEN}` };
+  let ids = [];
+  let offset;
+  do {
+    const url =
+      `https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/${AIRTABLE_TABLE_ID}` +
+      `?filterByFormula=${formula}&fields%5B%5D=Ticker${offset ? `&offset=${offset}` : ""}`;
+    const res = await fetch(url, { headers });
+    if (!res.ok) throw new Error(`Airtable list failed: ${res.status} ${await res.text()}`);
+    const json = await res.json();
+    for (const rec of json.records) {
+      if (!keepTickers.has(rec.fields.Ticker)) ids.push(rec.id);
+    }
+    offset = json.offset;
+  } while (offset);
+  return ids;
+}
+
+async function deleteFromAirtable(recordIds) {
+  for (let i = 0; i < recordIds.length; i += AIRTABLE_BATCH_SIZE) {
+    const batch = recordIds.slice(i, i + AIRTABLE_BATCH_SIZE);
+    const params = batch.map((id) => `records[]=${id}`).join("&");
+    const url = `https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/${AIRTABLE_TABLE_ID}?${params}`;
+    const res = await fetch(url, {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${AIRTABLE_TOKEN}` }
+    });
+    if (!res.ok) {
+      const body = await res.text();
+      throw new Error(`Airtable delete failed for batch starting at ${i}: ${res.status} ${body}`);
+    }
+    if (i + AIRTABLE_BATCH_SIZE < recordIds.length) {
       await sleep(250);
     }
   }
@@ -359,8 +406,19 @@ async function main() {
     return;
   }
 
-  await writeToAirtable(records);
-  console.log(`Wrote ${records.length} records for ${today} (screened ${results.length}/${watchlist.length} tickers successfully):`);
+  await upsertToAirtable(records);
+
+  const keepTickers = new Set(top.map((s) => s.symbol));
+  const staleIds = await getStaleRecordIds(today, keepTickers).catch((e) => {
+    console.warn(`Could not check for stale same-day rows: ${e.message}`);
+    return [];
+  });
+  if (staleIds.length > 0) {
+    await deleteFromAirtable(staleIds);
+    console.log(`Removed ${staleIds.length} row(s) left over from an earlier run today that are no longer in the top ${TOP_N}.`);
+  }
+
+  console.log(`Wrote/updated ${records.length} records for ${today} (screened ${results.length}/${watchlist.length} tickers successfully):`);
   top.forEach((s) => console.log(`  ${s.symbol} — composite ${s.compositeScore}`));
 }
 

@@ -37,3 +37,10 @@ inputs to your own analysis.
 - With ~150 tickers screened per run (2 Yahoo requests each, spaced out), expect the
   job to take a few minutes rather than seconds — still well within GitHub Actions'
   free-tier minutes.
+- Each run **upserts** on (Ticker, Date): re-running the job for a day already written
+  updates those rows in place rather than creating duplicates, and any row left over
+  from an earlier run today whose ticker fell out of the new top 50 is deleted. Rows
+  from other dates are never touched.
+- Use "Run workflow" (workflow_dispatch) to run the latest code on demand. "Re-run jobs"
+  on a past run re-executes that run's *original* commit, not the current tip of main —
+  don't use it to test a code change.
