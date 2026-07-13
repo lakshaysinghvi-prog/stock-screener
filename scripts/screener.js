@@ -118,6 +118,8 @@ function computeEntryZone(currentPrice, dma50, dma200, rsi) {
     note = "Price below 50DMA but above 200DMA — consolidation/base-building zone. Rule-based entry only triggers on a reclaim of the 50DMA; stop below the 200DMA.";
   } else if (currentPrice < dma50 && dma50 < dma200) {
     note = "Downtrend structure (price < 50DMA < 200DMA). No rule-based entry zone — this setup favors staying out until the trend structure repairs.";
+  } else if (currentPrice < dma50 && currentPrice < dma200 && dma50 > dma200) {
+    note = "Fresh breakdown (price below both the 50DMA and 200DMA, with the 50DMA still above the 200DMA). No rule-based entry zone — this favors staying out until price reclaims the 200DMA.";
   } else {
     entryLow = currentPrice * 0.97;
     entryHigh = currentPrice * 1.01;
